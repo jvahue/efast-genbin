@@ -1,0 +1,6 @@
+syntax: regexp
+^Debug.
+^GenBinCfg/Debug/.
+syntax: glob
+GenBinCfg.ncb
+GenBinCfg/GenBinCfg.vcproj.JeffDesk-HP.JeffDesk.user
