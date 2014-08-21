@@ -93,7 +93,7 @@
 			OutputDirectory="$(SolutionDir)$(ConfigurationName)"
 			IntermediateDirectory="$(ConfigurationName)"
 			ConfigurationType="1"
-			CharacterSet="1"
+			CharacterSet="0"
 			WholeProgramOptimization="1"
 			>
 			<Tool
@@ -115,11 +115,12 @@
 				Name="VCCLCompilerTool"
 				Optimization="2"
 				EnableIntrinsicFunctions="true"
-				PreprocessorDefinitions="WIN32;NDEBUG;_CONSOLE"
+				AdditionalIncludeDirectories="&quot;$(ProjectDir)&quot;;&quot;$(SolutionDir)/../target/adrf/code&quot;"
+				PreprocessorDefinitions="WIN32;_DEBUG;_CONSOLE;GEN_BIN_CFG"
 				RuntimeLibrary="2"
 				EnableFunctionLevelLinking="true"
-				UsePrecompiledHeader="2"
-				WarningLevel="3"
+				UsePrecompiledHeader="0"
+				WarningLevel="0"
 				DebugInformationFormat="3"
 			/>
 			<Tool

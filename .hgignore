@@ -1,6 +1,8 @@
 syntax: regexp
 ^Debug.
 ^GenBinCfg/Debug/.
+^GenBinCfg/Release.
+^Release.
 syntax: glob
 GenBinCfg.ncb
 GenBinCfg/GenBinCfg.vcproj.JeffDesk-HP.JeffDesk.user
