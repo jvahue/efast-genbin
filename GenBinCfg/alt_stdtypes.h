@@ -53,6 +53,19 @@
 #define INT32_MIN          LONG_MIN
 #define INT32_MAX          LONG_MAX
 
+#define htons(x) x
+#define htonl(x) x
+
+#ifdef WIN32
+#define htonl(A) ((((UINT32)(A) & 0xff000000) >> 24) | \
+    (((UINT32)(A) & 0x00ff0000) >> 8) | \
+    (((UINT32)(A) & 0x0000ff00) << 8) | \
+    (((UINT32)(A) & 0x000000ff) << 24))
+
+#define htons(A) ((((UINT32)(A) & 0x0000ff00) >> 8) | \
+    (((UINT32)(A) & 0x000000ff) << 8))
+#endif
+
 /******************************************************************************
                                 Package Typedefs
 ******************************************************************************/
@@ -109,7 +122,6 @@ typedef double             FLOAT64;
 //#define strtod        g4eStrtod
 
 typedef signed char   INT8;
-
 
 #include "alt_Time.h"
 

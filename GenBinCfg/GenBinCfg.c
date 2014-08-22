@@ -1,6 +1,5 @@
 // GenBinCfg.cpp : Defines the entry point for the console application.
 //
-
 #include <stdio.h>
 #include "stdafx.h"
 
@@ -81,9 +80,27 @@ ADRF_CTL        m_adrfCtl[MAX_ADRF_REPORT];   // ADRF report control
                   (((UINT32)(A) & 0x00ff0000) >> 8) | \
                   (((UINT32)(A) & 0x0000ff00) << 8) | \
                   (((UINT32)(A) & 0x000000ff) << 24))
+
+//-----------------------------------------------------------------------------
+// Local Functions
+//-----------------------------------------------------------------------------
+void Init(void);
+BOOL ChannelLogic(CHAR* gseCmd);
+BOOL ComputeCrc( CHAR* filename, UINT32* crc, UINT32 exclude);
+int ProcessCfgFile(CHAR* filename, CHAR* outName, int argc, UINT32 xmlCrc, UINT32 cfgCrc);
+
+CFGMGR_NVRAM* CfgMgr_RuntimeConfigPtr(void);
+
 //-----------------------------------------------------------------------------
 // Local Variables
 //-----------------------------------------------------------------------------
+// create the default Cfg structure to be filled in by the ASCCI Cfg file
+CFGMGR_NVRAM binFileCoreA;  // holds the binary cfg image for Channel A
+CFGMGR_NVRAM binFileCoreB;  // holds the binary cfg image for Channel B
+BOOL copyAtoB;              // should we copy chan A image to chan B image
+BOOL processChannelA;       // Which buffer is actively being filled
+BYTE crcData[CRC_BUFFER_SIZE]; // CRC calc buffer
+
 static const CFGMGR_NVRAM DefaultNVCfg = {
 
     "EFAST DEFAULT",     // Id
@@ -124,19 +141,12 @@ static const CFGMGR_NVRAM DefaultNVCfg = {
     // Trig default data - Leave blank here.  Update of this field is coded.
 };
 
-// create the default Cfg structure to be filled in by the ASCCI Cfg file
-CFGMGR_NVRAM binFileCoreA;  // holds the binary cfg image for Channel A
-CFGMGR_NVRAM binFileCoreB;  // holds the binary cfg image for Channel B
-BOOL copyAtoB;              // should we copy chan A image to chan B image
-BOOL processChannelA;       // Which buffer is actively being filled
-BYTE crcData[CRC_BUFFER_SIZE]; // CRC calc buffer
-
 //-----------------------------------------------------------------------------
 // Local Functions
 //-----------------------------------------------------------------------------
 void Init(void);
 BOOL ChannelLogic(CHAR* gseCmd);
-BOOL ComputeCrc( CHAR* filename, UINT32* crc);
+BOOL ComputeCrc( CHAR* filename, UINT32* crc, UINT32 exclude);
 int ProcessCfgFile(CHAR* filename, CHAR* outName, int argc, UINT32 xmlCrc, UINT32 cfgCrc);
 
 CFGMGR_NVRAM* CfgMgr_RuntimeConfigPtr(void);
@@ -169,10 +179,10 @@ int _tmain(int argc, _TCHAR* argv[])
         isXml = strstr(argv[1], ".XML") != NULL;
         if (isXml)
         {
-            if( ComputeCrc( argv[1], &xmlCrc))
+            if( ComputeCrc( argv[1], &xmlCrc, 4))
             {
                 xmlCrcValid = TRUE;
-                if (ComputeCrc(argv[2], &cfgCrc))
+                if (ComputeCrc(argv[2], &cfgCrc, 4))
                 {
                     cfgCrcValid = TRUE;
                 }
@@ -208,7 +218,7 @@ int _tmain(int argc, _TCHAR* argv[])
 }
 
 //-----------------------------------------------------------------------------------------------
-// Initialize the Bianry Cfg File Generator
+// Initialize the Binary Cfg File Generator
 void Init(void)
 {
     memcpy(&binFileCoreA, &DefaultNVCfg, sizeof(binFileCoreA));
@@ -237,11 +247,13 @@ int ProcessCfgFile(CHAR* filename, CHAR* outName, int argc, UINT32 xmlCrc, UINT3
 {
     FILE* fi;  // the input ASCII CFG/XML file
     FILE* fo;  // the output file
+
     BOOL isEmpty;
     BOOL isComment;
     BOOL isChanLogic;
     CHAR lineBuffer[LINE_SIZE];
     CHAR cmdResponse[LINE_SIZE];
+    UINT32 binFileCrc;
     USER_MSG_RETCODE errCode;
 
     // open/process the cfg file (ascii)
@@ -320,6 +332,21 @@ int ProcessCfgFile(CHAR* filename, CHAR* outName, int argc, UINT32 xmlCrc, UINT3
 
             fclose(fo);
 
+            // now compute the CRC for the entire file and append it.
+            ComputeCrc(lineBuffer, &binFileCrc, 0);
+            fo = fopen(lineBuffer, "ab");
+            if (fo != NULL)
+            {
+                binFileCrc = htonl(binFileCrc);
+                fwrite(&binFileCrc, 1, sizeof(binFileCrc), fo);
+                fclose(fo);
+            }
+            else
+            {
+                printf("Failed to append CRC to binary file: %s", lineBuffer);
+                return -102;
+            }
+
             return 0;
         }
         else
@@ -366,6 +393,7 @@ BOOL ChannelLogic(CHAR* gseCmd)
     else if (strcasecmp(gseCmd, START_B) == 0)
     {
         processChannelA = FALSE;
+        copyAtoB = FALSE;
         return TRUE;
     }
     else if (strcasecmp(gseCmd, END_B) == 0)
@@ -381,7 +409,7 @@ BOOL ChannelLogic(CHAR* gseCmd)
 // binary to ensure no CR/LF translation occurs.
 // Return True if the computed CRC matches the file CRC, otherwise False.
 //
-BOOL ComputeCrc( CHAR* filename, UINT32* crc)
+BOOL ComputeCrc(CHAR* filename, UINT32* crc, UINT32 exclude)
 {
     UINT32 crcRemaining;  // number of bytes remaining in the CRC
     UINT32 readCount;
@@ -401,19 +429,21 @@ BOOL ComputeCrc( CHAR* filename, UINT32* crc)
             {
                 if ( fileSize < CRC_BUFFER_SIZE)
                 {
-                    crcRemaining = fileSize - 4;
+                    crcRemaining = fileSize - exclude;
                     readCount = fread(crcData, 1, CRC_BUFFER_SIZE, f);
                     if (readCount == fileSize)
                     {
                         CRC32(crcData, crcRemaining, crc, CRC_FUNC_SINGLE);
                     }
-
-                    memcpy(&fileCrc, &crcData[crcRemaining], 4);
+                    if (exclude > 0)
+                    {
+                        memcpy(&fileCrc, &crcData[crcRemaining], exclude);
+                    }
                 }
                 else
                 {
                     // this will take us several reads
-                    crcRemaining = fileSize - 4;
+                    crcRemaining = fileSize - exclude;
                     readCount = fread(crcData, 1, CRC_BUFFER_SIZE, f);
                     crcRemaining -= readCount;
 
@@ -432,7 +462,10 @@ BOOL ComputeCrc( CHAR* filename, UINT32* crc)
                         }
                     }
 
-                    fread(&fileCrc, 1, 4, f);
+                    if (exclude > 0)
+                    {
+                        fread(&fileCrc, 1, exclude, f);
+                    }
                 }
             }
         }
