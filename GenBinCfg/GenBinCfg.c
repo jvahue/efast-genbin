@@ -75,11 +75,15 @@ ADRF_CTL        m_adrfCtl[MAX_ADRF_REPORT];   // ADRF report control
 #define BINCFG_END_ADJ  12  // Exclude the 3 CRCs at the End of CFGMGR_NVRAM
 #define LINE_SIZE 512
 #define CRC_BUFFER_SIZE (500*1024)
+#define XML_TAGS 8
 
-#define htonl(A) ((((UINT32)(A) & 0xff000000) >> 24) | \
-                  (((UINT32)(A) & 0x00ff0000) >> 8) | \
-                  (((UINT32)(A) & 0x0000ff00) << 8) | \
-                  (((UINT32)(A) & 0x000000ff) << 24))
+//-----------------------------------------------------------------------------
+// typedefs
+//-----------------------------------------------------------------------------
+typedef struct {
+    char xmlTag[64];
+    char cmd[64];
+} XML_MAP;
 
 //-----------------------------------------------------------------------------
 // Local Functions
@@ -87,7 +91,13 @@ ADRF_CTL        m_adrfCtl[MAX_ADRF_REPORT];   // ADRF report control
 void Init(void);
 BOOL ChannelLogic(CHAR* gseCmd);
 BOOL ComputeCrc( CHAR* filename, UINT32* crc, UINT32 exclude);
+void ProcessXmlFile(CHAR* filename);
 int ProcessCfgFile(CHAR* filename, CHAR* outName, int argc, UINT32 xmlCrc, UINT32 cfgCrc);
+void ParamMgr_ResetDefaultCfg ( PARAM_CFG_PTR pParamCfg );
+void TriggerMgr_ResetDefaultCfg ( TRIG_CFG_PTR pTrigCfg );
+void AcmfRpt_ResetDefaultCfg(ACMF_CFG_PTR pParamCfg);
+void AdrfRpt_ResetDefaultCfg(ADRF_CFG_PTR pParamCfg);
+void ShowOffsets(void);
 
 CFGMGR_NVRAM* CfgMgr_RuntimeConfigPtr(void);
 
@@ -101,61 +111,26 @@ BOOL copyAtoB;              // should we copy chan A image to chan B image
 BOOL processChannelA;       // Which buffer is actively being filled
 BYTE crcData[CRC_BUFFER_SIZE]; // CRC calc buffer
 
-static const CFGMGR_NVRAM DefaultNVCfg = {
+// Do this here as for some reason the Default NVM structure confuses WholeTomato
+#include "DefaultNvm.h"
 
-    "EFAST DEFAULT",     // Id
-    0,                   // VerId
-
-    // Time History default data
-    {TH_MGR_CFG_DEFAULT},
-
-    // Report Manager default data
-    {REPORTMGR_CFG_DEFAULT},
-
-    // ADRF Report default data
-    {ADRF_RPT_CFG_DEFAULT},
-    {ADRF_TRIG_CFG_DEFAULT},
-    {ADRF_TRIG_HIST_CFG_DEFAULT},
-
-    // ACMF Report default data
-    {ACMF_RPT_CFG_DEFAULT},
-    {ACMF_TRIG_CFG_DEFAULT},
-    {ACMF_TRIG_HIST_CFG_DEFAULT},
-
-    // Event default data
-    {EVENT_CFG_DEFAULT},
-
-    // Event default data
-    {CRUISE_CFG_DEFAULT},
-
-    // Efast Mgr default data
-    {EFAST_MGR_CFG_DEFAULT},
-
-    // Cycle default data
-    {CYCLE_CFG_DEFAULT},
-
-    // ACMF Divergence Configuration
-    {DIVERGE_CFG_DEFAULT},
-
-    // Param default data - Leave blank here.  Update of this field is coded.
-    // Trig default data - Leave blank here.  Update of this field is coded.
+static const XML_MAP xmlMap[XML_TAGS] = {
+    {"<Aircraft_Type>",    "EFAST.CFG.AC.TYPE"},
+    {"<Fleet_Ident>",      "EFAST.CFG.AC.FLEETIDENT"},
+    {"<Aircraft_Number>",  "EFAST.CFG.AC.NUMBER"},
+    {"<Tail_Number>",      "EFAST.CFG.AC.TAILNUMBER"},
+    {"<Aircraft_Style>",   "EFAST.CFG.AC.STYLE"},
+    {"<Airline_Operator>", "EFAST.CFG.AC.OPERATOR"},
+    {"<Aircraft_Owner>",   "EFAST.CFG.AC.OWNER"},
+    {"<Validate_Data>",    "EFAST.CFG.AC.VALIDATE"},
 };
 
-//-----------------------------------------------------------------------------
-// Local Functions
-//-----------------------------------------------------------------------------
-void Init(void);
-BOOL ChannelLogic(CHAR* gseCmd);
-BOOL ComputeCrc( CHAR* filename, UINT32* crc, UINT32 exclude);
-int ProcessCfgFile(CHAR* filename, CHAR* outName, int argc, UINT32 xmlCrc, UINT32 cfgCrc);
-
-CFGMGR_NVRAM* CfgMgr_RuntimeConfigPtr(void);
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////
 // Usage: GenBinCfg <xml> <asciiCfg> [<outputName>]
 //
 int _tmain(int argc, _TCHAR* argv[])
 {
+    UINT32 result;
     UINT32 readCount;
     UINT32 xmlCrc;
     UINT32 binCrc;
@@ -166,6 +141,7 @@ int _tmain(int argc, _TCHAR* argv[])
 
     if ( argc == 3 || argc == 4)
     {
+        ShowOffsets();
         Init();
 
         // assume we have a cfg file with only one channel's worth of data
@@ -182,6 +158,10 @@ int _tmain(int argc, _TCHAR* argv[])
             if( ComputeCrc( argv[1], &xmlCrc, 4))
             {
                 xmlCrcValid = TRUE;
+
+                // send in any cfg info from the xml file
+                ProcessXmlFile(argv[1]);
+
                 if (ComputeCrc(argv[2], &cfgCrc, 4))
                 {
                     cfgCrcValid = TRUE;
@@ -191,7 +171,19 @@ int _tmain(int argc, _TCHAR* argv[])
 
         if (cfgCrcValid)
         {
-            return ProcessCfgFile(argv[2], argv[1], argc, xmlCrc, cfgCrc);
+            result = ProcessCfgFile(argv[2], argv[1], argc, xmlCrc, cfgCrc);
+
+            if (result == 0)
+            {
+                printf("\nA Binary Cfg File has been generated.\n");
+                printf("If this is a new ADRF code release please confirm the following\n");
+                printf("items have not been altered as the conversion program has its\n");
+                printf("own implementation of them to facilitate the conversion:\n");
+                printf("  1. DefaultNVCfg - the definition is unchanged\n");
+                printf("  2. ParamMgr_ResetDefaultCfg - no code changes to this function\n");
+                printf("  3. AcmfRpt_ResetDefaultCfg - no code changes to this function\n");
+                printf("  4. AdrfRpt_ResetDefaultCfg - no code changes to this function\n");
+            }
         }
         else
         {
@@ -215,14 +207,31 @@ int _tmain(int argc, _TCHAR* argv[])
         printf("Usage Error: GenBinCfg <xml> <asciiCfg> [<outputName>]");
         return -1;
     }
+
 }
 
 //-----------------------------------------------------------------------------------------------
 // Initialize the Binary Cfg File Generator
 void Init(void)
 {
+    // clear the entire CFG area
+    memset(&binFileCoreA, 0, sizeof(binFileCoreA));
+    memset(&binFileCoreB, 0, sizeof(binFileCoreB));
+
     memcpy(&binFileCoreA, &DefaultNVCfg, sizeof(binFileCoreA));
     memcpy(&binFileCoreB, &DefaultNVCfg, sizeof(binFileCoreB));
+
+    // Finalize A Initialization
+    AdrfRpt_ResetDefaultCfg(binFileCoreA.adrfCfg);
+    AcmfRpt_ResetDefaultCfg(binFileCoreA.acmfCfg);
+    ParamMgr_ResetDefaultCfg ( &binFileCoreA.Param_Cfgs[0] );
+    TriggerMgr_ResetDefaultCfg ( &binFileCoreA.Trig_Cfgs[0] );
+
+    // Finalize B Initialization
+    AdrfRpt_ResetDefaultCfg(binFileCoreB.adrfCfg);
+    AcmfRpt_ResetDefaultCfg(binFileCoreB.acmfCfg);
+    ParamMgr_ResetDefaultCfg ( &binFileCoreB.Param_Cfgs[0] );
+    TriggerMgr_ResetDefaultCfg ( &binFileCoreB.Trig_Cfgs[0] );
 
     // Initialize the User Manager
     User_Init();
@@ -239,6 +248,52 @@ void Init(void)
     User_AddRootCmd(&reportRootTblPtr);
     User_AddRootCmd(&timehistoryRootTblPtr);
     User_AddRootCmd(&trigRootTblPtr);
+}
+
+//---------------------------------------------------------------------------------------------
+void ProcessXmlFile(CHAR* filename)
+{
+    int insert;
+    int x;
+    FILE* fi;  // the input ASCII CFG/XML file
+    CHAR* p;
+    CHAR value[LINE_SIZE];
+    CHAR cmdLine[LINE_SIZE];
+    CHAR cmdResponse[LINE_SIZE];
+    USER_MSG_RETCODE errCode;
+
+    fi = fopen(filename, "r");
+    if (fi != NULL)
+    {
+        if ( fread(crcData, 1, CRC_BUFFER_SIZE, fi) != NULL )
+        {
+            for (x = 0; x < XML_TAGS; ++x)
+            {
+                p = strstr(crcData, xmlMap[x].xmlTag);
+                if (p != NULL)
+                {
+                    // we found a tag of interest - get its value
+                    p += strlen(xmlMap[x].xmlTag);
+                    insert = 0;
+                    memset(value, 0, sizeof(value));
+                    while (*p != '<' && insert < LINE_SIZE)
+                    {
+                        value[insert] = *p;
+                        p++;
+                        insert += 1;
+                    }
+                    
+                    if (*p == '<')
+                    {
+                        sprintf(cmdLine, "%s=%s", xmlMap[x].cmd, value);
+                        User_ExecuteCmdMsg(cmdLine, 0, 0, &errCode, cmdResponse, LINE_SIZE);
+                        outputBuffer[0] = '\0';
+                    }
+                }
+            }
+        }
+        fclose(fi);
+    }
 }
 
 //-----------------------------------------------------------------------------------------------
@@ -275,14 +330,11 @@ int ProcessCfgFile(CHAR* filename, CHAR* outName, int argc, UINT32 xmlCrc, UINT3
             if (!isEmpty && !isComment && !isChanLogic)
             {
                 User_ExecuteCmdMsg(lineBuffer, 0, 0, &errCode, cmdResponse, LINE_SIZE);
+                outputBuffer[0] = '\0';
             }
             insertAt = 0;
         }
         fclose (fi);
-
-        // Fill in the CRCs
-        binFileCoreA.checksumXML = xmlCrc;
-        binFileCoreA.checksumCombined = cfgCrc;
 
         // Set CRC for default cfg
         CRC32((const void*)&binFileCoreA,
@@ -290,9 +342,27 @@ int ProcessCfgFile(CHAR* filename, CHAR* outName, int argc, UINT32 xmlCrc, UINT3
             &binFileCoreA.checksum,
             CRC_FUNC_SINGLE);
 
+        // Fill in the CRCs & correct endianess
+        binFileCoreA.checksum = hton4(binFileCoreA.checksum);
+        binFileCoreA.checksumXML = hton4(xmlCrc);
+        binFileCoreA.checksumCombined = hton4(cfgCrc);
+
         if (copyAtoB)
         {
             memcpy(&binFileCoreB, &binFileCoreA, sizeof(binFileCoreB));
+        }
+        else
+        {
+            // Set CRC for default cfg
+            CRC32((const void*)&binFileCoreB,
+                (sizeof(binFileCoreB)-BINCFG_END_ADJ),
+                &binFileCoreB.checksum,
+                CRC_FUNC_SINGLE);
+
+            // Fill in the CRCs & correct endianess
+            binFileCoreB.checksum = hton4(binFileCoreB.checksum);
+            binFileCoreB.checksumXML = hton4(xmlCrc);
+            binFileCoreB.checksumCombined = hton4(cfgCrc);
         }
 
         // Write out each of the channels config.bin files
@@ -337,7 +407,7 @@ int ProcessCfgFile(CHAR* filename, CHAR* outName, int argc, UINT32 xmlCrc, UINT3
             fo = fopen(lineBuffer, "ab");
             if (fo != NULL)
             {
-                binFileCrc = htonl(binFileCrc);
+                binFileCrc = hton4(binFileCrc);
                 fwrite(&binFileCrc, 1, sizeof(binFileCrc), fo);
                 fclose(fo);
             }
@@ -466,13 +536,101 @@ BOOL ComputeCrc(CHAR* filename, UINT32* crc, UINT32 exclude)
                     {
                         fread(&fileCrc, 1, exclude, f);
                     }
+                    else
+                    {
+                        fileCrc = hton4(*crc);
+                    }
                 }
             }
         }
 
-        result = (htonl(fileCrc) == *crc);
+        result = (hton4(fileCrc) == *crc);
         fclose(f);
     }
 
     return result;
+}
+
+//---------------------------------------------------------------------------------------------
+void ParamMgr_ResetDefaultCfg ( PARAM_CFG_PTR pParamCfg )
+{
+    UINT16 i;
+
+    for (i = 0; i < MAX_PARAMS; i++)
+    {
+        //*pParamCfg = (PARAM_CFG){PARAM_MGR_CFG_DEFAULT};
+        memcpy(pParamCfg, &paramDefault, sizeof(paramDefault));
+        pParamCfg->dbID = hton4(i);
+        pParamCfg++;
+    }
+}
+
+//---------------------------------------------------------------------------------------------
+void TriggerMgr_ResetDefaultCfg ( TRIG_CFG_PTR pTrigCfg )
+{
+    UINT16 i;
+
+    for (i = 0; i < MAX_TRIGGERS; i++)
+    {
+        //*pTrigCfg = (TRIG_CFG) {TRIG_MGR_CFG_DEFAULT};
+        memcpy (pTrigCfg, &trigDefault, sizeof(trigDefault));
+        pTrigCfg++;
+    }
+}
+
+//---------------------------------------------------------------------------------------------
+void AcmfRpt_ResetDefaultCfg(ACMF_CFG_PTR pParamCfg)
+{
+    UINT16 i;
+
+    for (i = 0; i < MAX_ACMF_REPORT; ++i)
+    {
+        pParamCfg->userRptNum = hton2(i);
+        pParamCfg++;
+    }
+}
+
+//---------------------------------------------------------------------------------------------
+void AdrfRpt_ResetDefaultCfg(ADRF_CFG_PTR pParamCfg)
+{
+    UINT16 i;
+
+    for (i = 0; i < MAX_ADRF_REPORT; ++i)
+    {
+        pParamCfg->userRptNum = hton2(i);
+        pParamCfg++;
+    }
+}
+
+//---------------------------------------------------------------------------------------------
+void ShowOffsets(void)
+{
+#define offsetof(a,b) ((int)(&(((a*)(0))->b)))
+
+    printf("TH_CFG              : 0x%08x\n",   offsetof(CFGMGR_NVRAM, TH_Cfg));
+    printf("REPORT_CFG          : 0x%08x\n",   offsetof(CFGMGR_NVRAM, reportCfg));
+    printf("ADRF_CFGS           : 0x%08x\n",   offsetof(CFGMGR_NVRAM, adrfCfg));
+    printf("ADRF_TRIG_CFG       : 0x%08x\n",   offsetof(CFGMGR_NVRAM, adrfTrigCfg));
+    printf("ADRF_TRIG_HIST_CFG  : 0x%08x\n",   offsetof(CFGMGR_NVRAM, adrfTrigHistCfg));
+    printf("ACMF_CFGS           : 0x%08x\n",   offsetof(CFGMGR_NVRAM, acmfCfg));
+    printf("ACMF_TRIG_CFG       : 0x%08x\n",   offsetof(CFGMGR_NVRAM, acmfTrigCfg));
+    printf("ACMF_TRIG_HIST_CFG  : 0x%08x\n",   offsetof(CFGMGR_NVRAM, acmfTrigHistCfg));
+    printf("EVENT_CFGS          : 0x%08x\n",   offsetof(CFGMGR_NVRAM, eventCfg));
+    printf("CRUISE_CFGS         : 0x%08x\n",   offsetof(CFGMGR_NVRAM, cruiseCfg));
+    printf("EFAST_MGR_CFG       : 0x%08x\n",   offsetof(CFGMGR_NVRAM, efastMgrCfg));
+    printf("CYCLE_CFGS          : 0x%08x\n",   offsetof(CFGMGR_NVRAM, Cycle_Cfgs));
+    printf("DIVERGE_CFGS        : 0x%08x\n",   offsetof(CFGMGR_NVRAM, divergeCfg));
+    printf("PARAM_CFGS          : 0x%08x\n",   offsetof(CFGMGR_NVRAM, Param_Cfgs));
+    printf("TRIG_CFGS           : 0x%08x\n",   offsetof(CFGMGR_NVRAM, Trig_Cfgs));
+}
+
+//----------------
+FLOAT32 ReverseFloat(FLOAT32 A)
+{
+    FLOAT32 fTemp = A;
+    UINT32* temp = (UINT32*)&fTemp;
+
+    *temp = hton4(*temp);
+
+    return fTemp;
 }

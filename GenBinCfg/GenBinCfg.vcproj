@@ -177,6 +177,10 @@
 				>
 			</File>
 			<File
+				RelativePath=".\DefaultNvm.h"
+				>
+			</File>
+			<File
 				RelativePath=".\deos.h"
 				>
 			</File>

@@ -53,17 +53,20 @@
 #define INT32_MIN          LONG_MIN
 #define INT32_MAX          LONG_MAX
 
-#define htons(x) x
-#define htonl(x) x
+// These MUST be placed here to utilize the UINT16/UINT32 definitions
+// We use these names so there is no conflict with the real htons, htonl
+#define hton2(x) x
+#define hton4(x) x
+#define htonf(x) x
 
 #ifdef WIN32
-#define htonl(A) ((((UINT32)(A) & 0xff000000) >> 24) | \
-    (((UINT32)(A) & 0x00ff0000) >> 8) | \
-    (((UINT32)(A) & 0x0000ff00) << 8) | \
-    (((UINT32)(A) & 0x000000ff) << 24))
 
-#define htons(A) ((((UINT32)(A) & 0x0000ff00) >> 8) | \
-    (((UINT32)(A) & 0x000000ff) << 8))
+#define hton2(A) ((((UINT16)(A) & 0xff00) >> 8) | (((UINT16)(A) & 0x00ff) << 8))
+
+#define hton4(A) ((((UINT32)(A) & 0xff000000) >> 24) | (((UINT32)(A) & 0x00ff0000) >> 8) | \
+                  (((UINT32)(A) & 0x0000ff00) << 8)  | (((UINT32)(A) & 0x000000ff) << 24))
+
+#define htonf(A) ReverseFloat(A)
 #endif
 
 /******************************************************************************
@@ -143,6 +146,7 @@ typedef signed char   INT8;
 /******************************************************************************
                              Package Exports Functions
 ******************************************************************************/
+FLOAT32 ReverseFloat(FLOAT32 A);
 
 #endif // ALT_STDTYPES_H
 
