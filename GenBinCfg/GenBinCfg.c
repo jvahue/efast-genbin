@@ -92,6 +92,8 @@ ADRF_CTL        m_adrfCtl[MAX_ADRF_REPORT];   // ADRF report control
 //-----------------------------------------------------------------------------
 // Defines
 //-----------------------------------------------------------------------------
+#define GBC_VERSION "v0.1.0"
+
 #define BIN_ID "BIN_"
 #define START_A "Channel_A_Begin"
 #define END_A   "Channel_A_End"
@@ -153,6 +155,7 @@ int _tmain(int argc, _TCHAR* argv[])
 
     if ( argc == 2)
     {
+        printf("\nGenerate Binary Cfg File %s\n\n", GBC_VERSION);
 #ifdef _DEBUG
         ShowOffsets();
 #endif
