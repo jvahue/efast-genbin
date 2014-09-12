@@ -116,7 +116,7 @@
 				Optimization="2"
 				EnableIntrinsicFunctions="true"
 				AdditionalIncludeDirectories="&quot;$(ProjectDir)&quot;;&quot;$(SolutionDir)/../target/adrf/code&quot;"
-				PreprocessorDefinitions="WIN32;_DEBUG;_CONSOLE;GEN_BIN_CFG"
+				PreprocessorDefinitions="WIN32;_CONSOLE;GEN_BIN_CFG"
 				RuntimeLibrary="2"
 				EnableFunctionLevelLinking="true"
 				UsePrecompiledHeader="0"
@@ -252,10 +252,6 @@
 		<Filter
 			Name="ADRF Stubs"
 			>
-			<File
-				RelativePath=".\AdrfStub.h"
-				>
-			</File>
 			<File
 				RelativePath=".\AdrfStubs.c"
 				>

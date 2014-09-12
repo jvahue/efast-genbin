@@ -1,5 +1,29 @@
 // GenBinCfg.cpp : Defines the entry point for the console application.
 //
+// Build Process: 
+// Make sure you have access to the ADRF code and you have specified that code directory as an 
+// include directory.  Additionally you may have to add the following files if the relative code 
+// path to the ADRF has changed.  This build assumes the following directory structure:
+// 
+// dev [or some root directory name]
+// + GenBinCfg
+//   + GenBinCfg <-- standard Visual Studio directory structure
+// + target
+//   + adrf
+//     + code <-- location of all adrf code files
+//
+// Assuming this directory structure exists do the following prior to building GenBinCfg.exe:
+// 1. Go to the target/adrf/code and rename alt_stdtypes.h -> alt_stdtypesx.h
+// 2. Perform the build in Visual Studio as usual <Release> build
+// 3. Go to the target/adrf/code and rename alt_stdtypesx.h -> alt_stdtypes.h
+//
+// Dependencies on ADRF Code that will require a recompile of this code
+// 1. Obviously any change to the CFGMGR_NVRAM structure 
+// 2. DefaultNVCfg - the definition is unchanged
+// 3. ParamMgr_ResetDefaultCfg - no code changes to this function
+// 4. AcmfRpt_ResetDefaultCfg - no code changes to this function
+// 5. AdrfRpt_ResetDefaultCfg - no code changes to this function
+// 
 #include <stdio.h>
 #include "stdafx.h"
 
@@ -18,6 +42,7 @@
 #include "CruiseMgr.h"
 #include "Cycle.h"
 #include "DivergenceMgr.h"
+#include "efast.h"
 #include "EfastMgr.h"
 #include "EventMgr.h"
 #include "ParamMgr.h"
@@ -25,7 +50,7 @@
 #include "TimeHistoryMgr.h"
 #include "TriggerMgr.h"
 
-//#include "AdrfStub.h"
+
 #include "GSEMgr.h"
 
 //-----------------------------------------------------------------------------------
@@ -71,7 +96,7 @@ ADRF_CTL        m_adrfCtl[MAX_ADRF_REPORT];   // ADRF report control
 #define START_A "Channel_A_Begin"
 #define END_A   "Channel_A_End"
 #define START_B "Channel_B_Begin"
-#define END_B   "Channel_A_End"
+#define END_B   "Channel_B_End"
 #define BINCFG_END_ADJ  12  // Exclude the 3 CRCs at the End of CFGMGR_NVRAM
 #define LINE_SIZE 512
 #define CRC_BUFFER_SIZE (500*1024)
@@ -89,10 +114,10 @@ typedef struct {
 // Local Functions
 //-----------------------------------------------------------------------------
 void Init(void);
+int AsciiFileHasCrc(CHAR* filename);
 BOOL ChannelLogic(CHAR* gseCmd);
 BOOL ComputeCrc( CHAR* filename, UINT32* crc, UINT32 exclude);
-void ProcessXmlFile(CHAR* filename);
-int ProcessCfgFile(CHAR* filename, CHAR* outName, int argc, UINT32 xmlCrc, UINT32 cfgCrc);
+int ProcessCfgFile(CHAR* filename, UINT32 cfgCrc, BOOL hasWrapper);
 void ParamMgr_ResetDefaultCfg ( PARAM_CFG_PTR pParamCfg );
 void TriggerMgr_ResetDefaultCfg ( TRIG_CFG_PTR pTrigCfg );
 void AcmfRpt_ResetDefaultCfg(ACMF_CFG_PTR pParamCfg);
@@ -114,103 +139,127 @@ BYTE crcData[CRC_BUFFER_SIZE]; // CRC calc buffer
 // Do this here as for some reason the Default NVM structure confuses WholeTomato
 #include "DefaultNvm.h"
 
-static const XML_MAP xmlMap[XML_TAGS] = {
-    {"<Aircraft_Type>",    "EFAST.CFG.AC.TYPE"},
-    {"<Fleet_Ident>",      "EFAST.CFG.AC.FLEETIDENT"},
-    {"<Aircraft_Number>",  "EFAST.CFG.AC.NUMBER"},
-    {"<Tail_Number>",      "EFAST.CFG.AC.TAILNUMBER"},
-    {"<Aircraft_Style>",   "EFAST.CFG.AC.STYLE"},
-    {"<Airline_Operator>", "EFAST.CFG.AC.OPERATOR"},
-    {"<Aircraft_Owner>",   "EFAST.CFG.AC.OWNER"},
-    {"<Validate_Data>",    "EFAST.CFG.AC.VALIDATE"},
-};
-
 ///////////////////////////////////////////////////////////////////////////////////////////////
 // Usage: GenBinCfg <xml> <asciiCfg> [<outputName>]
 //
 int _tmain(int argc, _TCHAR* argv[])
 {
+    int    cfgFileStatus; // 1 valid File, 0 invalid CRC, -1 does not exist
+    BOOL   hasWrapper;
     UINT32 result;
     UINT32 readCount;
-    UINT32 xmlCrc;
     UINT32 binCrc;
     UINT32 cfgCrc;
-    BOOL xmlCrcValid;
-    BOOL cfgCrcValid;
-    BOOL isXml;
 
-    if ( argc == 3 || argc == 4)
+    if ( argc == 2)
     {
+#ifdef _DEBUG
         ShowOffsets();
+#endif
         Init();
 
         // assume we have a cfg file with only one channel's worth of data
         copyAtoB = TRUE;
         processChannelA = TRUE;
 
-        // make sure param1 is an xml file, and check both files CRCs
-        xmlCrcValid = FALSE;
-        cfgCrcValid = FALSE;
-        Supper(argv[1]);
-        isXml = strstr(argv[1], ".XML") != NULL;
-        if (isXml)
+        cfgFileStatus = AsciiFileHasCrc(argv[1]);
+        if (cfgFileStatus == 0)
         {
-            if( ComputeCrc( argv[1], &xmlCrc, 4))
+            ComputeCrc(argv[1], &cfgCrc, 0);
+            cfgFileStatus = 1;
+            hasWrapper = FALSE;
+        }
+        else if (cfgFileStatus == 1)
+        {
+            hasWrapper = TRUE;
+            if (ComputeCrc(argv[1], &cfgCrc, 4))
             {
-                xmlCrcValid = TRUE;
-
-                // send in any cfg info from the xml file
-                ProcessXmlFile(argv[1]);
-
-                if (ComputeCrc(argv[2], &cfgCrc, 4))
-                {
-                    cfgCrcValid = TRUE;
-                }
+                cfgFileStatus = 1;
+            }
+            else
+            {
+                cfgFileStatus = 0;
             }
         }
 
-        if (cfgCrcValid)
+        if (cfgFileStatus == 1)
         {
-            result = ProcessCfgFile(argv[2], argv[1], argc, xmlCrc, cfgCrc);
+            result = ProcessCfgFile(argv[1], cfgCrc, hasWrapper);
 
             if (result == 0)
             {
-                printf("\nA Binary Cfg File has been generated.\n");
-                printf("If this is a new ADRF code release please confirm the following\n");
-                printf("items have not been altered as the conversion program has its\n");
-                printf("own implementation of them to facilitate the conversion:\n");
-                printf("  1. DefaultNVCfg - the definition is unchanged\n");
+                printf("\nA Binary Cfg File has been generated called:\n");
+                printf("  <%s.bcf>.\n", argv[1]);
+                printf("\nThis Binary Cfg File is only compatible with [v%s] ADRF code.\n\n", 
+                    PRODUCT_VER_VALUE);
+                printf("If this Binary Cfg file is to be loaded into a different ADRF code\n");
+                printf("release please confirm the following items have not been altered as\n");
+                printf("the conversion program has its own implementation of these functions\n");
+                printf("and data to facilitate the conversion:\n\n");
+                printf("  1. Any change to CFGMGR_NVRAM structure or DefaultNVCfg content\n");
                 printf("  2. ParamMgr_ResetDefaultCfg - no code changes to this function\n");
                 printf("  3. AcmfRpt_ResetDefaultCfg - no code changes to this function\n");
                 printf("  4. AdrfRpt_ResetDefaultCfg - no code changes to this function\n");
             }
+            else
+            {
+                printf("\n*** FAILED CONVERSION ***\n");
+                return -3;
+            }
         }
-        else
+        else if (cfgFileStatus == 0)
         {
-            if (!isXml)
-            {
-                printf("Usage Error: GenBinCfg <xml> <asciiCfg> [<outputName>]\n");
-            }
-            if (!xmlCrcValid)
-            {
-                printf("XML File CRC Error: %s\n", argv[1]);
-            }
-            if (!cfgCrcValid)
-            {
-                printf("CFG File CRC Error: %s\n", argv[2]);
-            }
+
+            printf("\nCFG File CRC Error: <%s>\n", argv[1]);
             return -2;
         }
     }
     else
     {
-        printf("Usage Error: GenBinCfg <xml> <asciiCfg> [<outputName>]");
+        printf("\nUsage Error: GenBinCfg <asciiCfg>");
+        printf("Specify the name of the ASCII cfg file to convert to binary");
         return -1;
     }
-
 }
 
-//-----------------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------------------
+// Determine if the ASCII file is wrapped with TEXT..CRC
+// return 1 when wrapped with TEXT..CRC, 
+//        0 if not wrapped 
+//       -1 on file open error
+//
+int AsciiFileHasCrc( CHAR* filename )
+{
+    int status = 0;
+    char isText[4];
+    FILE* f;
+
+    f = fopen(filename, "rb");
+    if (f != NULL)
+    {
+        fread(isText, 1, 4, f);
+        fclose(f);
+
+        Supper(isText);
+        if (strncmp(isText, "TEXT", 4) == 0)
+        {
+            status = 1;
+        }
+        else
+        {
+            status = 0;
+        }
+    }
+    else
+    {
+        printf("\n*** Failed to open file for read: %s", filename);
+        status = -1;
+    }
+
+    return status;
+}
+
+//--------------------------------------------------------------------------------------------------
 // Initialize the Binary Cfg File Generator
 void Init(void)
 {
@@ -250,184 +299,181 @@ void Init(void)
     User_AddRootCmd(&trigRootTblPtr);
 }
 
-//---------------------------------------------------------------------------------------------
-void ProcessXmlFile(CHAR* filename)
-{
-    int insert;
-    int x;
-    FILE* fi;  // the input ASCII CFG/XML file
-    CHAR* p;
-    CHAR value[LINE_SIZE];
-    CHAR cmdLine[LINE_SIZE];
-    CHAR cmdResponse[LINE_SIZE];
-    USER_MSG_RETCODE errCode;
-
-    fi = fopen(filename, "r");
-    if (fi != NULL)
-    {
-        if ( fread(crcData, 1, CRC_BUFFER_SIZE, fi) != NULL )
-        {
-            for (x = 0; x < XML_TAGS; ++x)
-            {
-                p = strstr(crcData, xmlMap[x].xmlTag);
-                if (p != NULL)
-                {
-                    // we found a tag of interest - get its value
-                    p += strlen(xmlMap[x].xmlTag);
-                    insert = 0;
-                    memset(value, 0, sizeof(value));
-                    while (*p != '<' && insert < LINE_SIZE)
-                    {
-                        value[insert] = *p;
-                        p++;
-                        insert += 1;
-                    }
-                    
-                    if (*p == '<')
-                    {
-                        sprintf(cmdLine, "%s=%s", xmlMap[x].cmd, value);
-                        User_ExecuteCmdMsg(cmdLine, 0, 0, &errCode, cmdResponse, LINE_SIZE);
-                        outputBuffer[0] = '\0';
-                    }
-                }
-            }
-        }
-        fclose(fi);
-    }
-}
-
 //-----------------------------------------------------------------------------------------------
 // Process Cfg File
-int ProcessCfgFile(CHAR* filename, CHAR* outName, int argc, UINT32 xmlCrc, UINT32 cfgCrc)
+int ProcessCfgFile(CHAR* filename, UINT32 cfgCrc, BOOL hasWrapper)
 {
     FILE* fi;  // the input ASCII CFG/XML file
     FILE* fo;  // the output file
 
+    int cfgErrorCode;
     BOOL isEmpty;
     BOOL isComment;
     BOOL isChanLogic;
     CHAR lineBuffer[LINE_SIZE];
+    CHAR saveLineBuffer[LINE_SIZE];
     CHAR cmdResponse[LINE_SIZE];
+    UINT32 fileAt;
+    UINT32 fileSize;
+    UINT32 lineNumber;
     UINT32 binFileCrc;
     USER_MSG_RETCODE errCode;
 
-    // open/process the cfg file (ascii)
+    // open/process the cfg file (ASCII)
     fi = fopen(filename, "r");
+    if (fseek(fi, 0, SEEK_END) == 0)
+    {
+        fileSize = ftell(fi);
+        fclose(fi);
+        fi = fopen(filename, "r");
+
+        if (hasWrapper)
+        {
+            fileSize -= 4;
+            fseek(fi, 4, SEEK_CUR);
+        }
+    }
+
+    cfgErrorCode = 0;
     if (fi != NULL)
     {
-        while ( !feof(fi) )
+        lineNumber = 0;
+        while ( ftell(fi) != fileSize)
         {
             if ( fgets (lineBuffer , LINE_SIZE , fi) == NULL )
                 break;
+            lineNumber += 1;
+            fileAt = ftell(fi);
             // --- do cmd line filtering ---
             // Remove comments, start with "//"
+            strcpy(saveLineBuffer, lineBuffer);
             StripString(lineBuffer);
 
             isEmpty = strlen(lineBuffer) == 0;
             isComment = lineBuffer[0] == '/' && lineBuffer[1] == '/';
             isChanLogic = ChannelLogic(lineBuffer);
 
+#ifdef _DEBUG
+            if (lineNumber == 8848)
+            {
+                lineNumber = lineNumber;
+            }
+#endif
             if (!isEmpty && !isComment && !isChanLogic)
             {
                 User_ExecuteCmdMsg(lineBuffer, 0, 0, &errCode, cmdResponse, LINE_SIZE);
+                if (errCode != USER_MSG_OK)
+                {
+                    printf("\n*** Config File error on line: %d\n", lineNumber);
+                    printf("Line: %s", saveLineBuffer);
+                    printf("%s", outputBuffer);
+                    cfgErrorCode += 1;                                     
+                }
                 outputBuffer[0] = '\0';
             }
             insertAt = 0;
         }
+#ifdef _DEBUG
+        printf("File size: %d at %d\n", fileSize, ftell(fi));
+#endif
         fclose (fi);
 
-        // Set CRC for default cfg
-        CRC32((const void*)&binFileCoreA,
-            (sizeof(binFileCoreA)-BINCFG_END_ADJ),
-            &binFileCoreA.checksum,
-            CRC_FUNC_SINGLE);
-
-        // Fill in the CRCs & correct endianess
-        binFileCoreA.checksum = hton4(binFileCoreA.checksum);
-        binFileCoreA.checksumXML = hton4(xmlCrc);
-        binFileCoreA.checksumCombined = hton4(cfgCrc);
-
-        if (copyAtoB)
-        {
-            memcpy(&binFileCoreB, &binFileCoreA, sizeof(binFileCoreB));
-        }
-        else
+        if (cfgErrorCode == 0)
         {
             // Set CRC for default cfg
-            CRC32((const void*)&binFileCoreB,
-                (sizeof(binFileCoreB)-BINCFG_END_ADJ),
-                &binFileCoreB.checksum,
+            CRC32((const void*)&binFileCoreA,
+                (sizeof(binFileCoreA)-BINCFG_END_ADJ),
+                &binFileCoreA.checksum,
                 CRC_FUNC_SINGLE);
 
             // Fill in the CRCs & correct endianess
-            binFileCoreB.checksum = hton4(binFileCoreB.checksum);
-            binFileCoreB.checksumXML = hton4(xmlCrc);
-            binFileCoreB.checksumCombined = hton4(cfgCrc);
-        }
+            binFileCoreA.checksum = hton4(binFileCoreA.checksum);
+            binFileCoreA.checksumXML = hton4(0);
+            binFileCoreA.checksumCombined = hton4(cfgCrc);
 
-        // Write out each of the channels config.bin files
-        fo = fopen("configA.bin", "wb");
-        fwrite(&binFileCoreA, sizeof(binFileCoreA), 1, fo);
-        fclose(fo);
-
-        fo = fopen("configB.bin", "wb");
-        fwrite(&binFileCoreB, sizeof(binFileCoreB), 1, fo);
-        fclose(fo);
-
-        // write the binary file out - did they give us a name?
-        if (argc == 4)
-        {
-            strcpy(lineBuffer, outName);
-        }
-        else
-        {
-            sprintf(lineBuffer, "%s.bcf", filename);
-        }
-
-        fo = fopen(lineBuffer, "wb");
-        if (fo != NULL)
-        {
-            // BIN_ Identifier
-            fwrite(BIN_ID, 1, strlen(BIN_ID), fo);
-
-            // Channel A
-            fwrite(START_A, 1, strlen(START_A), fo);
-            fwrite(&binFileCoreA, sizeof(binFileCoreA), 1, fo);
-            fwrite(END_A, 1, strlen(END_A), fo);
-
-            // Channel B
-            fwrite(START_B, 1, strlen(START_B), fo);
-            fwrite(&binFileCoreB, sizeof(binFileCoreB), 1, fo);
-            fwrite(END_B, 1, strlen(END_B), fo);
-
-            fclose(fo);
-
-            // now compute the CRC for the entire file and append it.
-            ComputeCrc(lineBuffer, &binFileCrc, 0);
-            fo = fopen(lineBuffer, "ab");
-            if (fo != NULL)
+            if (copyAtoB)
             {
-                binFileCrc = hton4(binFileCrc);
-                fwrite(&binFileCrc, 1, sizeof(binFileCrc), fo);
-                fclose(fo);
+                memcpy(&binFileCoreB, &binFileCoreA, sizeof(binFileCoreB));
             }
             else
             {
-                printf("Failed to append CRC to binary file: %s", lineBuffer);
-                return -102;
+                // Set CRC for default cfg
+                CRC32((const void*)&binFileCoreB,
+                    (sizeof(binFileCoreB)-BINCFG_END_ADJ),
+                    &binFileCoreB.checksum,
+                    CRC_FUNC_SINGLE);
+
+                // Fill in the CRCs & correct endianess
+                binFileCoreB.checksum = hton4(binFileCoreB.checksum);
+                binFileCoreB.checksumXML = hton4(0);
+                binFileCoreB.checksumCombined = hton4(cfgCrc);
             }
 
-            return 0;
+            // Write out each of the channels config.bin files
+            fo = fopen("configA.bin", "wb");
+            fwrite(&binFileCoreA, sizeof(binFileCoreA), 1, fo);
+            fclose(fo);
+
+            fo = fopen("configB.bin", "wb");
+            fwrite(&binFileCoreB, sizeof(binFileCoreB), 1, fo);
+            fclose(fo);
+
+            // write the binary file out
+            sprintf(lineBuffer, "%s.bcf", filename);
+
+            fo = fopen(lineBuffer, "wb");
+            if (fo != NULL)
+            {
+                // BIN_ Identifier
+                fwrite(BIN_ID, 1, strlen(BIN_ID), fo);
+
+                // Channel A
+                fwrite(START_A, 1, strlen(START_A), fo);
+                fwrite(&binFileCoreA, sizeof(binFileCoreA), 1, fo);
+                fwrite(END_A, 1, strlen(END_A), fo);
+
+                // Channel B
+                fwrite(START_B, 1, strlen(START_B), fo);
+                fwrite(&binFileCoreB, sizeof(binFileCoreB), 1, fo);
+                fwrite(END_B, 1, strlen(END_B), fo);
+
+                fclose(fo);
+
+                // now compute the CRC for the entire file and append it.
+                ComputeCrc(lineBuffer, &binFileCrc, 0);
+                fo = fopen(lineBuffer, "ab");
+                if (fo != NULL)
+                {
+                    binFileCrc = hton4(binFileCrc);
+                    fwrite(&binFileCrc, 1, sizeof(binFileCrc), fo);
+                    fclose(fo);
+                }
+                else
+                {
+                    printf("\nFailed to append CRC to binary file: %s", lineBuffer);
+                    return -103;
+                }
+
+                return 0;
+            }
+            else
+            {
+                printf("\nFailed to open file for write: %s", lineBuffer);
+                return -102;
+            }
         }
         else
         {
-            printf("Failed to open file for write: %s", lineBuffer);
+            printf("\n*** %d error%s occurred during the conversion.\n", 
+                cfgErrorCode, cfgErrorCode > 1 ? "s" : "");
+            printf("No binary configuration file was generated.\n");
             return -101;
         }
     }
     else
     {
-        printf("Failed to open file for read: %s", filename);
+        // we should never get here because this is caught in AsciiFileHasCrc
+        printf("\nFailed to open file for read: %s", filename);
         return -100;
     }
 }
@@ -505,9 +551,14 @@ BOOL ComputeCrc(CHAR* filename, UINT32* crc, UINT32 exclude)
                     {
                         CRC32(crcData, crcRemaining, crc, CRC_FUNC_SINGLE);
                     }
+
                     if (exclude > 0)
                     {
                         memcpy(&fileCrc, &crcData[crcRemaining], exclude);
+                    }
+                    else
+                    {
+                        fileCrc = hton4(*crc);
                     }
                 }
                 else
@@ -624,7 +675,7 @@ void ShowOffsets(void)
     printf("TRIG_CFGS           : 0x%08x\n",   offsetof(CFGMGR_NVRAM, Trig_Cfgs));
 }
 
-//----------------
+//-----------------------------------
 FLOAT32 ReverseFloat(FLOAT32 A)
 {
     FLOAT32 fTemp = A;
