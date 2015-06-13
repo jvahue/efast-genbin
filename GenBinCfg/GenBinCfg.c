@@ -1,7 +1,7 @@
 // GenBinCfg.cpp : Defines the entry point for the console application.
 //
 // Build Process: 
-// Make sure you have access to the ADRF code and you have specified that code directory as an 
+// Make sure you have access to the ADRF code and you have specified the code directory as an 
 // include directory.  Additionally you may have to add the following files if the relative code 
 // path to the ADRF has changed.  This build assumes the following directory structure:
 // 
@@ -146,7 +146,7 @@ BYTE crcData[CRC_BUFFER_SIZE]; // CRC calc buffer
 //
 int _tmain(int argc, _TCHAR* argv[])
 {
-    int    cfgFileStatus; // 1 valid File, 0 invalid CRC, -1 does not exist
+    int    progStatus;    // 1 valid File, 0 invalid CRC, -1 does not exist
     BOOL   hasWrapper;
     UINT32 result;
     UINT32 readCount;
@@ -165,27 +165,27 @@ int _tmain(int argc, _TCHAR* argv[])
         copyAtoB = TRUE;
         processChannelA = TRUE;
 
-        cfgFileStatus = AsciiFileHasCrc(argv[1]);
-        if (cfgFileStatus == 0)
+        progStatus = AsciiFileHasCrc(argv[1]);
+        if (progStatus == 0)
         {
             ComputeCrc(argv[1], &cfgCrc, 0);
-            cfgFileStatus = 1;
+            progStatus = 1;
             hasWrapper = FALSE;
         }
-        else if (cfgFileStatus == 1)
+        else if (progStatus == 1)
         {
             hasWrapper = TRUE;
             if (ComputeCrc(argv[1], &cfgCrc, 4))
             {
-                cfgFileStatus = 1;
+                progStatus = 1;
             }
             else
             {
-                cfgFileStatus = 0;
+                progStatus = 0;
             }
         }
 
-        if (cfgFileStatus == 1)
+        if (progStatus == 1)
         {
             result = ProcessCfgFile(argv[1], cfgCrc, hasWrapper);
 
@@ -207,22 +207,28 @@ int _tmain(int argc, _TCHAR* argv[])
             else
             {
                 printf("\n*** FAILED CONVERSION ***\n");
-                return -3;
+                progStatus = -3;
             }
         }
-        else if (cfgFileStatus == 0)
+        else if (progStatus == 0)
         {
 
             printf("\nCFG File CRC Error: <%s>\n", argv[1]);
-            return -2;
+            progStatus = -2;
         }
     }
     else
     {
         printf("\nUsage Error: GenBinCfg <asciiCfg>");
         printf("Specify the name of the ASCII cfg file to convert to binary");
-        return -1;
+        progStatus = -1;
     }
+
+#if _DEBUG
+    printf("Hit any key to end ... exit status(%d)", progStatus);
+    getchar();
+#endif
+    return progStatus;
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -255,7 +261,7 @@ int AsciiFileHasCrc( CHAR* filename )
     }
     else
     {
-        printf("\n*** Failed to open file for read: %s", filename);
+        printf("\n*** Failed to open file for read:\n<%s>\n", filename);
         status = -1;
     }
 

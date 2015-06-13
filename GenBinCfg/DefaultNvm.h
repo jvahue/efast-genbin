@@ -14,7 +14,7 @@ static const TRIG_CFG trigDefault =
 static const CFGMGR_NVRAM DefaultNVCfg = {
 
     "EFAST DEFAULT",     // Id
-    0,                   // VerId
+    hton2(0),            // VerId
 
     // Time History default data
     {TH_MGR_CFG_DEFAULT},
